@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -27,6 +28,12 @@ if os.name == "nt":
     VENV_PYW = BACKEND_DIR / ".venv" / "Scripts" / "pythonw.exe"
 else:
     VENV_PYW = BACKEND_DIR / ".venv" / "bin" / "python"
+
+
+def port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def deps_missing() -> bool:
@@ -54,6 +61,11 @@ def open_browser_later():
 
 
 def main():
+    # 幂等：服务已在运行时，只打开浏览器，不重复启动
+    if port_open(PORT):
+        webbrowser.open(URL)
+        return
+
     # 依赖不在当前解释器里（例如用系统 pythonw 启动）→ 用 venv 的 pythonw 重启，保持无窗口
     if deps_missing() and VENV_PYW.exists():
         os.execv(str(VENV_PYW), [str(VENV_PYW), str(Path(__file__).resolve())])
