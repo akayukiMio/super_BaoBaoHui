@@ -15,17 +15,19 @@ $ErrorActionPreference = "Stop"
 $ws = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
 $lnk = Join-Path $desktop '视频压缩工具(网页版).lnk'
-$pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
-if (-not $pythonw) { $pythonw = (Get-Command python.exe).Source }
 $webDir = 'e:\administrator\1!5!\script\video_compressor\web'
-$script = Join-Path $webDir 'run_dev.py'
+# 优先用 venv 的 pythonw.exe（依赖齐全且无控制台窗口）
+$pythonw = Join-Path $webDir 'backend\.venv\Scripts\pythonw.exe'
+if (-not (Test-Path $pythonw)) { $pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source }
+if (-not $pythonw) { $pythonw = (Get-Command python.exe).Source }
+$script = Join-Path $webDir 'run_web.py'
 $icon = 'e:\administrator\1!5!\script\video_compressor\icon.ico'
 $s = $ws.CreateShortcut($lnk)
 $s.TargetPath = $pythonw
 $s.Arguments = '"' + $script + '"'
 $s.WorkingDirectory = $webDir
 $s.IconLocation = $icon + ',0'
-$s.Description = '视频批量压缩工具 网页版 (本地浏览器)'
+$s.Description = '视频批量压缩工具 网页版 (本地浏览器·无窗口)'
 $s.Save()
 Write-Output $lnk
 '''

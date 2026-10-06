@@ -12,6 +12,8 @@ from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core import fsbrowse
@@ -235,3 +237,24 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         pump_task.cancel()
         task_manager.unsubscribe(q)
+
+
+# ---------------- 生产模式：后端直接托管前端构建产物 ----------------
+# 若 web/frontend/dist 存在，则由 FastAPI 直接托管静态文件与 SPA 回退，
+# 单进程运行、无需 vite dev server 与代理（也就没有 ws 代理报错）。
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.exists():
+    _assets_dir = FRONTEND_DIST / "assets"
+    if _assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # /api 与 /ws 已在前面注册，具体路由优先匹配；这里兜底交给前端 SPA
+        if full_path.startswith("api/") or full_path == "ws":
+            return {"detail": "Not Found"}, 404
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and str(candidate).startswith(str(FRONTEND_DIST)):
+            return FileResponse(str(candidate))
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
