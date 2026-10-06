@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Butterfly 默认浅色主题（RGB 通道，供 <alpha-value> 使用） */
+    --background: 245 247 250;
+    --foreground: 44 44 44;
+    --card: 255 255 255;
+    --card-foreground: 44 44 44;
+    --popover: 255 255 255;
+    --popover-foreground: 44 44 44;
+    --primary: 73 177 245;
+    --primary-foreground: 255 255 255;
+    --secondary: 238 241 245;
+    --secondary-foreground: 44 44 44;
+    --accent: 0 196 182;
+    --accent-foreground: 255 255 255;
+    --muted: 241 243 245;
+    --muted-foreground: 133 133 133;
+    --destructive: 244 116 102;
+    --destructive-foreground: 255 255 255;
+    --border: 230 233 238;
+    --input: 230 233 238;
+    --ring: 73 177 245;
+  }
+
+  .dark {
+    /* Butterfly 深色主题 */
+    --background: 20 22 26;
+    --foreground: 230 230 230;
+    --card: 30 33 38;
+    --card-foreground: 230 230 230;
+    --popover: 30 33 38;
+    --popover-foreground: 230 230 230;
+    --primary: 73 177 245;
+    --primary-foreground: 255 255 255;
+    --secondary: 42 46 53;
+    --secondary-foreground: 230 230 230;
+    --accent: 0 196 182;
+    --accent-foreground: 6 35 31;
+    --muted: 42 46 53;
+    --muted-foreground: 160 166 173;
+    --destructive: 244 116 102;
+    --destructive-foreground: 255 255 255;
+    --border: 47 51 58;
+    --input: 47 51 58;
+    --ring: 73 177 245;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply text-foreground;
+    font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background-color: rgb(var(--background));
+    background-image: linear-gradient(
+        rgba(245, 247, 250, 0.78),
+        rgba(245, 247, 250, 0.78)
+      ),
+      url("/img/bg.jpg");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    min-height: 100vh;
+  }
+
+  .dark body {
+    background-image: linear-gradient(
+        rgba(18, 20, 24, 0.85),
+        rgba(18, 20, 24, 0.85)
+      ),
+      url("/img/bg.jpg");
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--primary) / 0.5);
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    @apply rounded-2xl border border-border bg-card/90 shadow-soft backdrop-blur-sm;
+  }
+}

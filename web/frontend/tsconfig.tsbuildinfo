@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/filebrowserdialog.tsx","./src/components/logconsole.tsx","./src/components/progresspanel.tsx","./src/components/settingspanel.tsx","./src/components/videotable.tsx","./src/components/ui.tsx","./src/lib/utils.ts"],"version":"5.9.3"}

@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+web/backend/.venv/
 
 # 运行期生成物（可由程序重新产生，不纳入版本控制）
 logs/
@@ -14,6 +15,9 @@ web/frontend/node_modules/
 web/frontend/dist/
 web/frontend/.vite/
 *.local
+
+# 启动器运行期产物
+web/.run/
 
 # 编辑器 / 系统
 .vscode/

@@ -1,0 +1,4 @@
+# 视频批量压缩工具 - Web 后端依赖 (Python 3.9+)
+fastapi>=0.110,<0.116
+uvicorn[standard]>=0.27,<0.31
+pydantic>=2.7,<3
