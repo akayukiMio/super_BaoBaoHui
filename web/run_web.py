@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生产模式启动器：单进程运行（uvicorn 直接托管已构建的前端），打开浏览器。
+"""生产模式启动器（供桌面快捷方式以 pythonw.exe 无控制台方式调用）。
 
-用 pythonw.exe 运行则完全没有命令行窗口；只有一个后台 python 进程。
-若前端尚未构建（web/frontend/dist 不存在），首次会自动执行一次 npm run build。
+做法：父进程以后台隐藏子进程方式拉起 uvicorn（输出写入 web/.run/backend.log，
+使用 CREATE_NO_WINDOW 不弹任何命令行窗口），轮询端口就绪后用 os.startfile 打开浏览器。
+- 幂等：若 8765 已在监听，则只打开浏览器。
+- 若前端未构建（web/frontend/dist 不存在），首次自动执行一次 npm run build。
 """
 from __future__ import annotations
 
@@ -11,7 +13,6 @@ import os
 import socket
 import subprocess
 import sys
-import threading
 import time
 import webbrowser
 from pathlib import Path
@@ -20,14 +21,12 @@ HERE = Path(__file__).resolve().parent
 BACKEND_DIR = HERE / "backend"
 FRONTEND_DIR = HERE / "frontend"
 DIST = FRONTEND_DIR / "dist"
+RUN_DIR = HERE / ".run"
 PORT = 8765
 URL = f"http://127.0.0.1:{PORT}"
 
-# venv 的无控制台解释器（Windows 用 pythonw.exe）
-if os.name == "nt":
-    VENV_PYW = BACKEND_DIR / ".venv" / "Scripts" / "pythonw.exe"
-else:
-    VENV_PYW = BACKEND_DIR / ".venv" / "bin" / "python"
+IS_WIN = os.name == "nt"
+VENV_PY = BACKEND_DIR / ".venv" / ("Scripts/python.exe" if IS_WIN else "bin/python")
 
 
 def port_open(port: int) -> bool:
@@ -36,48 +35,62 @@ def port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def deps_missing() -> bool:
+def open_browser():
     try:
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
-        return False
-    except ImportError:
-        return True
+        if IS_WIN:
+            os.startfile(URL)
+        else:
+            webbrowser.open(URL)
+    except Exception:
+        try:
+            webbrowser.open(URL)
+        except Exception:
+            pass
 
 
 def ensure_build():
     if (DIST / "index.html").exists():
         return
-    npm = "npm.cmd" if os.name == "nt" else "npm"
+    npm = "npm.cmd" if IS_WIN else "npm"
     subprocess.run([npm, "run", "build"], cwd=str(FRONTEND_DIR), check=False)
 
 
-def open_browser_later():
-    time.sleep(1.8)
-    try:
-        webbrowser.open(URL)
-    except Exception:
-        pass
+def start_server_detached():
+    RUN_DIR.mkdir(exist_ok=True)
+    log = open(RUN_DIR / "backend.log", "ab")
+    py = str(VENV_PY) if VENV_PY.exists() else sys.executable
+    kwargs = dict(
+        cwd=str(BACKEND_DIR), stdout=log, stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+    )
+    if IS_WIN:
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 不弹控制台窗口
+    else:
+        kwargs["start_new_session"] = True
+    p = subprocess.Popen(
+        [py, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(PORT)],
+        **kwargs,
+    )
+    (RUN_DIR / "backend.pid").write_text(str(p.pid), encoding="utf-8")
+
+
+def wait_port(timeout: float = 90.0) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        if port_open(PORT):
+            return True
+        time.sleep(0.4)
+    return False
 
 
 def main():
-    # 幂等：服务已在运行时，只打开浏览器，不重复启动
     if port_open(PORT):
-        webbrowser.open(URL)
+        open_browser()
         return
-
-    # 依赖不在当前解释器里（例如用系统 pythonw 启动）→ 用 venv 的 pythonw 重启，保持无窗口
-    if deps_missing() and VENV_PYW.exists():
-        os.execv(str(VENV_PYW), [str(VENV_PYW), str(Path(__file__).resolve())])
-        return
-
     ensure_build()
-    os.chdir(BACKEND_DIR)
-    sys.path.insert(0, str(BACKEND_DIR))
-
-    threading.Thread(target=open_browser_later, daemon=True).start()
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=PORT, log_level="warning")
+    start_server_detached()
+    wait_port()
+    open_browser()  # 无论是否探测到就绪都尝试打开，失败可查 web/.run/backend.log
 
 
 if __name__ == "__main__":
