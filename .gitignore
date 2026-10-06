@@ -15,6 +15,9 @@ web/frontend/node_modules/
 web/frontend/dist/
 web/frontend/.vite/
 *.local
+*.tsbuildinfo
+web/frontend/vite.config.js
+web/frontend/vite.config.d.ts
 
 # 启动器运行期产物
 web/.run/
