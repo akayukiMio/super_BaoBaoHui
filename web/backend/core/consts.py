@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 APP_TITLE = "视频批量压缩工具 by akayukimio"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 # 后端所在目录 -> 项目根（web/backend/core/consts.py -> 上三级）
 BACKEND_DIR = Path(__file__).resolve().parent.parent      # web/backend

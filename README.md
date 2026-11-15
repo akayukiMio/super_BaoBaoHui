@@ -4,7 +4,7 @@
 项目提供两种形态：**Tkinter 桌面版** 与 **本地网页版**（同一套核心逻辑）。
 
 - 作者：akayukimio
-- 版本：v1.2.0
+- 版本：v1.3.0
 
 ## 功能概览
 - CPU 编码 `libx265`、GPU 编码 `hevc_nvenc` / `av1_nvenc`（自动检测可用编码器）
@@ -13,6 +13,8 @@
 - 强制压缩高效编码源文件、覆盖已存在输出
 - 扫描/多选文件、勾选/全选、进度与速度/ETA、暂停/恢复/停止
 - 删除已压缩源文件（移入 Windows 回收站，可恢复）
+- **外部交接队列**：其它本地工具（如 IwaraTimeSaver）可 `POST /api/handoff` 入队，
+  串行压缩并自动清理/归档源文件（见下文「与外部工作流交接」）
 - 结果/错误/删除会话日志（UTF-8 BOM），配置持久化，明暗主题
 
 ## 依赖
@@ -27,15 +29,16 @@ video_compressor/
 ├── icon.ico
 ├── logs/                       # 运行期日志（已 gitignore）
 ├── .processing_history.json    # 处理历史（含本地绝对路径，已 gitignore，绝不入库）
+├── handoff_queue.json          # 外部交接队列（运行期生成，已 gitignore）
 └── web/
     ├── backend/                # FastAPI 本地后端
-    │   ├── core/               # 复用核心逻辑：ffmpeg/worker/history/logger/recycle/fsbrowse/task_manager
+    │   ├── core/               # 复用核心逻辑：ffmpeg/worker/history/logger/recycle/fsbrowse/task_manager/handoff
     │   ├── main.py             # REST + WebSocket + 托管前端构建产物
     │   ├── requirements.txt
     │   └── .venv/              # 后端虚拟环境（已 gitignore）
     ├── frontend/               # React + TypeScript + Vite + Tailwind + shadcn 风格
     │   └── src/
-    ├── run_web.py              # 生产模式启动（单进程、无控制台窗口）
+    ├── run_web.py              # 生产模式启动（单进程、无控制台窗口；--no-browser 只起后端）
     ├── stop_web.py             # 停止生产服务
     ├── run_dev.py              # 开发模式启动（后端 + vite，两个进程）
     ├── stop_dev.py             # 停止开发服务
@@ -76,11 +79,43 @@ python web/run_dev.py        # 后端 8765 + 前端 vite 5173（/api、/ws 由 v
 python web/stop_dev.py
 ```
 
+## 与外部工作流交接（handoff）
+
+给本地自动化工具（目前是 IwaraTimeSaver）用的入口：投递一个文件，压缩器自己排队、串行压完，
+并按策略清理/归档源文件。接口只监听 `127.0.0.1`。
+
+```http
+POST /api/handoff
+{ "job_id": "视频ID", "paths": ["E:\\...\\xxx.mp4"], "source_dir": "E:\\...\\out", "size": 12345678 }
+
+202 {"ok":true,"job_id":"...","state":"queued","position":1}
+409 {"ok":false,"reason":"duplicate_active_job"}   // 同 job/路径已在队列或运行中
+```
+
+- `GET /api/handoff`：队列快照（含每个 job 的逐文件结果）
+- `GET /api/handoff/{job_id}`：单个 job
+- `POST /api/handoff/{job_id}/cancel`：取消排队中的 job
+- 队列持久化在 `handoff_queue.json`，进程重启后未完成的 job 会继续
+- 单 worker：手动会话在跑时，交接任务排队等待，不会并发抢 GPU
+- 交接任务使用**当前保存的压缩配置**（`~/.video_compressor/compressor_config.json`）
+
+交接任务会**自动开启**下面两个开关（手动会话保持原行为）：
+
+| 结果 | 产物 | 源文件 |
+|---|---|---|
+| 压缩后更小 | 留在输出目录 | 移入回收站（删前用 ffprobe 校验产物时长） |
+| 压缩后更大 | 丢弃 | 搬到输出目录（平铺；跨盘先写 `.partial` 再替换） |
+| 源已是 HEVC/AV1/VP9（未开强制压缩） | 无 | 搬到输出目录 |
+| 产物已存在且有效 | 保留 | 移入回收站（视为重复下载） |
+| FFmpeg 出错 | 清理残留 | 保留原位置，等重试 |
+
+`python web/run_web.py --no-browser` 供外部工具代拉起：只启动后端，不打开浏览器。
+
 ## 安全说明
 - 服务仅监听 `127.0.0.1`，不暴露到局域网。
-- `.processing_history.json`、`logs/`、`.venv/`、`node_modules/`、`dist/`、`web/.run/` 均已 `.gitignore` 排除，不会入库。
+- `.processing_history.json`、`handoff_queue.json`、`logs/`、`.venv/`、`node_modules/`、`dist/`、`web/.run/` 均已 `.gitignore` 排除，不会入库。
 
 ## 版本与维护
-- 语义化版本标签（如 `v1.2.0`）。
+- 语义化版本标签（如 `v1.3.0`）。
 - 回退到桌面版基线：`git checkout desktop-baseline`。
 - 日常同步：`git add -A && git commit -m "..." && git push`。
