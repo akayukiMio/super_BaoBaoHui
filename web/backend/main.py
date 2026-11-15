@@ -12,11 +12,11 @@ from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from core import fsbrowse
+from core import fsbrowse, handoff
 from core.consts import (
     APP_TITLE, APP_VERSION, ENCODERS, SCALE_OPTIONS, SUPPORTED_EXTENSIONS,
 )
@@ -42,6 +42,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def _startup():
     task_manager.attach_loop(asyncio.get_running_loop())
+    # 交接队列消费者：外部工作流（IwaraTimeSaver）投递的任务串行执行
+    if handoff.runner is None:
+        handoff.runner = handoff.HandoffRunner(handoff.queue, task_manager)
+        handoff.runner.start()
 
 
 # ---------------- 请求体模型 ----------------
@@ -74,6 +78,14 @@ class DeleteReq(BaseModel):
 
 class ConfigReq(BaseModel):
     config: dict
+
+
+class HandoffReq(BaseModel):
+    job_id: str
+    paths: List[str]
+    source_dir: Optional[str] = None
+    size: Optional[int] = 0
+    settings_override: Optional[dict] = None
 
 
 # ---------------- 基础信息 ----------------
@@ -177,6 +189,50 @@ async def state():
         "current_file": task_manager.current_file,
         "speed_text": task_manager.speed_text,
     }
+
+
+# ---------------- 外部交接队列（IwaraTimeSaver 等） ----------------
+
+@app.post("/api/handoff")
+async def handoff_enqueue(req: HandoffReq):
+    """入队一个压缩任务。返回 202 表示已排队；409 表示同一 job/路径已在队列或运行中。"""
+    job = {
+        "job_id": req.job_id,
+        "paths": req.paths,
+        "source_dir": req.source_dir or "",
+        "size": req.size or 0,
+        "settings_override": req.settings_override,
+    }
+    ok, reason, pos = handoff.queue.enqueue(job)
+    if not ok:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "reason": reason, "job": handoff.queue.get(req.job_id),
+        })
+    return JSONResponse(status_code=202, content={
+        "ok": True, "job_id": req.job_id, "state": "queued", "position": pos,
+    })
+
+
+@app.get("/api/handoff")
+async def handoff_list():
+    return {
+        "ok": True,
+        "jobs": handoff.queue.snapshot(),
+        "is_processing": task_manager.is_processing,
+    }
+
+
+@app.get("/api/handoff/{job_id}")
+async def handoff_get(job_id: str):
+    job = handoff.queue.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={"ok": False, "reason": "not_found"})
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/handoff/{job_id}/cancel")
+async def handoff_cancel(job_id: str):
+    return {"ok": handoff.queue.cancel(job_id)}
 
 
 # ---------------- 删除已压缩源文件 ----------------

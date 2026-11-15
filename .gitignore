@@ -9,6 +9,8 @@ web/backend/.venv/
 # 运行期生成物（可由程序重新产生，不纳入版本控制）
 logs/
 .processing_history.json
+handoff_queue.json
+handoff_queue.json.*.tmp
 
 # 前端
 web/frontend/node_modules/

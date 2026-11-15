@@ -27,6 +27,8 @@ URL = f"http://127.0.0.1:{PORT}"
 
 IS_WIN = os.name == "nt"
 VENV_PY = BACKEND_DIR / ".venv" / ("Scripts/python.exe" if IS_WIN else "bin/python")
+# 供其它本地工作流（如 IwaraTimeSaver）代拉起：只起后端，不抢焦点开浏览器
+NO_BROWSER = "--no-browser" in sys.argv
 
 
 def port_open(port: int) -> bool:
@@ -85,12 +87,14 @@ def wait_port(timeout: float = 90.0) -> bool:
 
 def main():
     if port_open(PORT):
-        open_browser()
+        if not NO_BROWSER:
+            open_browser()
         return
     ensure_build()
     start_server_detached()
     wait_port()
-    open_browser()  # 无论是否探测到就绪都尝试打开，失败可查 web/.run/backend.log
+    if not NO_BROWSER:
+        open_browser()  # 无论是否探测到就绪都尝试打开，失败可查 web/.run/backend.log
 
 
 if __name__ == "__main__":

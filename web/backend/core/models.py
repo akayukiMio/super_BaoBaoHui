@@ -19,7 +19,7 @@ class VideoFile:
     width: int = 0
     height: int = 0
     codec: str = ""
-    status: str = "pending"  # pending, processing, done, skipped, error, deleted
+    status: str = "pending"  # pending, processing, done, skipped, moved, error, deleted
     output_path: Optional[Path] = None
     output_size: int = 0
     error_msg: str = ""
@@ -27,6 +27,8 @@ class VideoFile:
     encode_seconds: float = 0.0
     progress: float = 0.0
     checked: bool = False
+    source_action: str = ""          # "" | "deleted"（删源）| "moved"（原片归档）
+    archive_path: Optional[Path] = None
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +46,8 @@ class VideoFile:
             "encode_seconds": self.encode_seconds,
             "progress": round(self.progress, 1),
             "checked": self.checked,
+            "source_action": self.source_action,
+            "archive_path": str(self.archive_path) if self.archive_path else None,
         }
 
 
@@ -60,6 +64,9 @@ class CompressionSettings:
     max_resolution: str = "原始分辨率"
     custom_output_dir: str = ""
     force_compress: bool = False
+    # 工作流自动化（只有交接任务默认开启，手动会话保持原行为）
+    auto_delete_source: bool = False    # 压缩成功且产物校验通过 -> 源文件进回收站
+    auto_archive_source: bool = False   # 没压动/无需压缩 -> 把源文件搬到存储目录（平铺）
 
     @classmethod
     def from_dict(cls, d: dict) -> "CompressionSettings":

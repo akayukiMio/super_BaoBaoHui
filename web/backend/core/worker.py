@@ -3,6 +3,8 @@
 """后台压缩处理线程（复用桌面版逻辑，把消息队列换成 emit 回调）。"""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -17,6 +19,7 @@ from .ffmpeg_helper import FFmpegHelper
 from .history import load_processing_history, save_processing_history
 from .logger import LogManager
 from .models import CompressionSettings, VideoFile
+from .recycle import send_to_recycle_bin
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -67,7 +70,7 @@ class CompressionWorker:
 
     def _run(self):
         total = len(self.files)
-        done_count = skipped_count = error_count = 0
+        done_count = skipped_count = error_count = moved_count = 0
         total_original_size = total_compressed_size = 0
         start_time = time.time()
         total_bytes_all = sum(vf.size for vf in self.files)
@@ -125,20 +128,33 @@ class CompressionWorker:
                     total_original_size += vf.size
                     total_compressed_size += vf.output_size
                     ratio = (1 - vf.output_size / vf.size) * 100 if vf.size > 0 else 0
+                    action = "，源已进回收站" if vf.source_action == "deleted" else ""
                     self._send("log",
                         f"[完成] {vf.path.name}  "
                         f"{self._fmt_size(vf.size)} → {self._fmt_size(vf.output_size)}  "
-                        f"({ratio:.1f}% 压缩率)")
+                        f"({ratio:.1f}% 压缩率){action}")
                     logger.write_result(
                         f"--- 文件 {idx + 1}/{total}  [完成] ---\n"
                         f"  文件名    : {vf.path.name}\n"
                         f"  原始大小  : {self._fmt_size(vf.size)}  ({vf.size:,} 字节)\n"
                         f"  压缩后    : {self._fmt_size(vf.output_size)}  ({vf.output_size:,} 字节)\n"
                         f"  节省空间  : {self._fmt_size(vf.size - vf.output_size)}  (压缩率 {ratio:.1f}%)\n"
-                        f"  编码耗时  : {self._fmt_time(vf.encode_seconds)}\n\n"
+                        f"  编码耗时  : {self._fmt_time(vf.encode_seconds)}\n"
+                        f"  源文件    : {'已移入回收站' if vf.source_action == 'deleted' else '保留'}\n\n"
                     )
                     history.add(str(vf.path))
                     save_processing_history(history)
+                elif result == "moved":
+                    moved_count += 1
+                    self._send("log",
+                        f"[归档原片] {vf.path.name}  没压动，源文件已搬到 {vf.archive_path}")
+                    logger.write_result(
+                        f"--- 文件 {idx + 1}/{total}  [原片归档] ---\n"
+                        f"  文件名    : {vf.path.name}\n"
+                        f"  原因      : 压缩产物不小于源，丢弃产物、保留原片\n"
+                        f"  原片大小  : {self._fmt_size(vf.size)}\n"
+                        f"  归档路径  : {vf.archive_path}\n\n"
+                    )
                 elif result == "skipped":
                     skipped_count += 1
                     if vf.error_msg:
@@ -169,7 +185,7 @@ class CompressionWorker:
             self._send("file_status", (idx, vf.status))
             self._send("overall_progress", (idx + 1, total))
 
-            if result in ("done", "skipped"):
+            if result in ("done", "skipped", "moved"):
                 completed_bytes += vf.size
             elapsed = time.time() - start_time
             if elapsed > 3 and completed_bytes > 0:
@@ -182,10 +198,11 @@ class CompressionWorker:
         self._send("log", "")
         self._send("log", "=" * 50)
         self._send("log", f"[汇总] 处理完成！耗时 {self._fmt_time(elapsed)}")
-        self._send("log", f"  成功: {done_count}  跳过: {skipped_count}  失败: {error_count}")
+        self._send("log", f"  成功: {done_count}  原片归档: {moved_count}  跳过: {skipped_count}  失败: {error_count}")
         summary_lines = [
             f"处理耗时   : {self._fmt_time(elapsed)}",
             f"成功       : {done_count} 个",
+            f"原片归档   : {moved_count} 个",
             f"跳过       : {skipped_count} 个",
             f"失败       : {error_count} 个",
         ]
@@ -220,6 +237,96 @@ class CompressionWorker:
         lines.append("")
         logger.write_error("\n".join(lines))
 
+    # ---------------- 源文件策略（交接工作流用） ----------------
+
+    def _archive_target(self, src: Path) -> Path:
+        """原片归档目标：与压缩产物同一套目录规则（平铺到 custom_output_dir）。"""
+        if self.settings.custom_output_dir and self.source_dir:
+            try:
+                rel = src.parent.relative_to(self.source_dir)
+            except ValueError:
+                rel = Path("")
+            base = Path(self.settings.custom_output_dir) / rel
+        else:
+            base = src.parent / self.settings.output_subdir
+        base.mkdir(parents=True, exist_ok=True)
+        target = base / src.name
+        if target.exists() and target.stat().st_size != src.stat().st_size:
+            stem, suffix = src.stem, src.suffix
+            i = 2
+            while (base / f"{stem} ({i}){suffix}").exists():
+                i += 1
+            target = base / f"{stem} ({i}){suffix}"
+        return target
+
+    def _archive_source(self, vf: VideoFile) -> bool:
+        """把源文件搬到存储目录（跨盘：先写 .partial 再 os.replace，失败保留源）。"""
+        if not self.settings.auto_archive_source:
+            return False
+        src = vf.path
+        tmp = None
+        try:
+            if not src.exists():
+                return False
+            target = self._archive_target(src)
+            if target.exists() and target.stat().st_size == src.stat().st_size:
+                # 存储目录已有同大小副本：源是重复的，直接删
+                if send_to_recycle_bin(str(src)):
+                    vf.source_action = "deleted"
+                    return True
+                return False
+            tmp = target.with_name(target.name + ".partial")
+            shutil.copy2(str(src), str(tmp))
+            if tmp.stat().st_size != src.stat().st_size:
+                raise OSError("复制后大小不一致")
+            os.replace(str(tmp), str(target))
+            tmp = None
+            if not send_to_recycle_bin(str(src)):
+                # 删不掉源就回滚目标，避免出现两份
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+                return False
+            vf.archive_path = target
+            vf.source_action = "moved"
+            return True
+        except Exception:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            return False
+
+    def _output_matches(self, vf: VideoFile, out: Path) -> bool:
+        """产物有效性：非空 + 时长与源基本一致（无法探测时不阻断）。"""
+        try:
+            if not out.exists() or out.stat().st_size <= 0:
+                return False
+            d_src = vf.duration or FFmpegHelper.get_duration_from_probe(vf.path)
+            d_out = FFmpegHelper.get_duration_from_probe(out)
+            if d_src <= 1 or d_out <= 0:
+                return True
+            return abs(d_out - d_src) <= max(2.0, d_src * 0.01)
+        except Exception:
+            return False
+
+    def _maybe_delete_source(self, vf: VideoFile) -> bool:
+        """压缩成功且产物校验通过：把源文件移入回收站（可恢复）。"""
+        if not self.settings.auto_delete_source:
+            return False
+        out = vf.output_path
+        if not out or not self._output_matches(vf, out):
+            return False
+        try:
+            if send_to_recycle_bin(str(vf.path)):
+                vf.source_action = "deleted"
+                return True
+        except Exception:
+            pass
+        return False
+
     def _process_file(self, vf: VideoFile) -> str:
         vf.status = "processing"
         self._send("file_status_update", vf.to_dict())
@@ -238,11 +345,15 @@ class CompressionWorker:
             vf.status = "skipped"
             vf.output_path = output_path
             vf.output_size = output_path.stat().st_size
+            self._maybe_delete_source(vf)   # 产物已在存储目录：E: 里这份是重复下载
             return "skipped"
 
         if not self.settings.force_compress and vf.codec.lower() in ALREADY_COMPRESSED_CODECS:
             vf.status = "skipped"
             vf.error_msg = f"源文件已是 {vf.codec.upper()} 编码，无需重新压缩"
+            if self._archive_source(vf):
+                vf.status = "moved"
+                return "moved"
             return "skipped"
 
         duration = FFmpegHelper.get_duration_from_probe(vf.path)
@@ -316,11 +427,15 @@ class CompressionWorker:
         output_size = output_path.stat().st_size
         if output_size >= vf.size:
             vf.status = "skipped"
-            vf.error_msg = f"压缩后反而更大 ({self._fmt_size(output_size)} > {self._fmt_size(vf.size)})，已丢弃"
+            vf.error_msg = f"压缩后反而变大 ({self._fmt_size(output_size)} > {self._fmt_size(vf.size)})，已丢弃产物"
             try:
                 output_path.unlink()
             except OSError:
                 pass
+            # 没压动：把源原片搬进存储目录，保证 E: 干净
+            if self._archive_source(vf):
+                vf.status = "moved"
+                return "moved"
             return "skipped"
 
         vf.status = "done"
@@ -328,6 +443,7 @@ class CompressionWorker:
         vf.output_size = output_size
         vf.progress = 100.0
         self._send("file_progress", 100.0)
+        self._maybe_delete_source(vf)        # 产物有效才删源，删进回收站可恢复
         return "done"
 
     @staticmethod

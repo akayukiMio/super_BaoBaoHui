@@ -213,6 +213,17 @@ def compute_deletable(
         key = os.path.normcase(str(vf.path))
         if key in seen:
             continue
+        # 自动交接已经把源删掉/搬走了：源不存在就不该再出现在“可删除”列表里
+        if getattr(vf, "source_action", ""):
+            seen.add(key)
+            continue
+        try:
+            if not vf.path.exists():
+                seen.add(key)
+                continue
+        except OSError:
+            seen.add(key)
+            continue
         if _valid(vf.output_path):
             deletable.append({
                 "path": str(vf.path), "name": vf.path.name,

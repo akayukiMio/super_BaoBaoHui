@@ -37,7 +37,8 @@ def load_config() -> dict:
     path = CONFIG_DIR / CONFIG_FILE
     try:
         if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
+            # utf-8-sig：容忍记事本/PowerShell 写出的 BOM，否则整个配置会被静默当成空
+            with open(path, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
     except Exception:
         pass
