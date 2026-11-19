@@ -203,10 +203,11 @@ async def handoff_enqueue(req: HandoffReq):
         "size": req.size or 0,
         "settings_override": req.settings_override,
     }
-    ok, reason, pos = handoff.queue.enqueue(job)
+    ok, reason, pos = await asyncio.to_thread(handoff.queue.enqueue, job)
     if not ok:
+        dup = await asyncio.to_thread(handoff.queue.get, req.job_id)
         return JSONResponse(status_code=409, content={
-            "ok": False, "reason": reason, "job": handoff.queue.get(req.job_id),
+            "ok": False, "reason": reason, "job": dup,
         })
     return JSONResponse(status_code=202, content={
         "ok": True, "job_id": req.job_id, "state": "queued", "position": pos,
@@ -215,16 +216,19 @@ async def handoff_enqueue(req: HandoffReq):
 
 @app.get("/api/handoff")
 async def handoff_list():
+    # snapshot() 要拿队列 RLock；消费者线程 finish()/claim_next() 可能在持锁时做磁盘写，
+    # 放事件循环里直接调会冻死 FastAPI（磁盘饱和时尤其明显）→ 拐到线程池。
+    jobs = await asyncio.to_thread(handoff.queue.snapshot)
     return {
         "ok": True,
-        "jobs": handoff.queue.snapshot(),
+        "jobs": jobs,
         "is_processing": task_manager.is_processing,
     }
 
 
 @app.get("/api/handoff/{job_id}")
 async def handoff_get(job_id: str):
-    job = handoff.queue.get(job_id)
+    job = await asyncio.to_thread(handoff.queue.get, job_id)
     if not job:
         return JSONResponse(status_code=404, content={"ok": False, "reason": "not_found"})
     return {"ok": True, "job": job}
@@ -232,7 +236,8 @@ async def handoff_get(job_id: str):
 
 @app.post("/api/handoff/{job_id}/cancel")
 async def handoff_cancel(job_id: str):
-    return {"ok": handoff.queue.cancel(job_id)}
+    ok = await asyncio.to_thread(handoff.queue.cancel, job_id)
+    return {"ok": ok}
 
 
 # ---------------- 删除已压缩源文件 ----------------
